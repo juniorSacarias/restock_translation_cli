@@ -1,0 +1,9 @@
+{
+  "@@locale": "da",
+  "hello": "Hej",
+  "bye": "Farvel",
+  "orphan": "Forældreløs",
+  "new_key": "Fandt {count} varer",
+  "special": "Linje 1\nLinje \"2\" æøå",
+  "fail_key": "Fejl"
+}

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# Restock ⇄ Ahamatic translations. See README.md or `translation help`.
+#
+# Requires: bash 4+, curl, jq 1.7+
+
+set -euo pipefail
+
+TOOL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+LIB_DIR="$TOOL_DIR/lib"
+
+for module in common config credentials usage args arb ahamatic diff push sync selector menu install; do
+  # shellcheck source=/dev/null
+  source "$LIB_DIR/$module.sh"
+done
+
+case "${1:-help}" in
+  exec)
+    shift
+    cmd_exec "$@"
+    ;;
+  test)
+    shift
+    exec "$TOOL_DIR/tests/run_tests.sh" "$@"
+    ;;
+  install) cmd_install ;;
+  help) usage ;;
+  *) cmd_sync "$@" ;;
+esac

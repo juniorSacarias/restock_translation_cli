@@ -1,0 +1,11 @@
+{
+  "@@locale": "en",
+  "hello": "Hello",
+  "bye": "Bye",
+  "orphan": "Orphan",
+  "new_key": "Found {count} items",
+  "@new_key": { "placeholders": { "count": { "type": "int" } } },
+  "special": "Line 1\nLine \"2\" æøå",
+  "fail_key": "Fail",
+  "only_en": "Only English"
+}

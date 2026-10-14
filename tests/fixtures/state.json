@@ -1,0 +1,41 @@
+{
+  "schemaName": "restock_schema",
+  "credentials": { "apiKey": "test-api-key", "email": "svc@test.local", "password": "test-password" },
+  "token": "test-token",
+  "keyEntity": "_translationKeys",
+  "firstNewId": 200,
+  "failKeyNames": ["fail_key"],
+  "schemas": {
+    "_translations": {
+      "Module": { "slug": "Module", "tempType": "string" },
+      "Language": { "slug": "Language", "tempType": "reference", "ref": "AppLanguages", "required": true },
+      "Key": { "slug": "Key", "tempType": "reference", "ref": "_translationKeys", "required": true },
+      "Value": { "slug": "Value", "tempType": "string" },
+      "Description": { "slug": "Description", "tempType": "string" }
+    },
+    "_translationKeys": {
+      "Name": { "slug": "Name", "tempType": "string", "required": true },
+      "Module": { "slug": "Module", "tempType": "string" }
+    }
+  },
+  "languages": [
+    { "Id": 11, "Module": "falckWebApp", "Language": { "Id": 1, "Code": "en", "Name": "English" }, "LanguageTag": "en-GB" },
+    { "Id": 12, "Module": "falckWebApp", "Language": { "Id": 2, "Code": "da", "Name": "Danish" }, "LanguageTag": "da-DK" },
+    { "Id": 13, "Module": "otherModule", "Language": { "Id": 3, "Code": "sv", "Name": "Swedish" }, "LanguageTag": "sv-SE" }
+  ],
+  "keys": [
+    { "Id": 100, "Name": "hello", "Module": "falckWebApp" },
+    { "Id": 101, "Name": "bye", "Module": "falckWebApp" },
+    { "Id": 102, "Name": "orphan", "Module": "falckWebApp" },
+    { "Id": 103, "Name": "remote_only", "Module": "falckWebApp" },
+    { "Id": 104, "Name": "special", "Module": "otherModule" }
+  ],
+  "translations": [
+    { "Id": 1, "Module": "falckWebApp", "Language": 11, "Key": 100, "Value": "Hello" },
+    { "Id": 2, "Module": "falckWebApp", "Language": 12, "Key": 100, "Value": "Hej" },
+    { "Id": 3, "Module": "falckWebApp", "Language": 11, "Key": 101, "Value": "Bye old" },
+    { "Id": 4, "Module": "falckWebApp", "Language": 12, "Key": 101, "Value": "" },
+    { "Id": 5, "Module": "falckWebApp", "Language": 11, "Key": 103, "Value": "Remote only" },
+    { "Id": 6, "Module": "otherModule", "Language": 13, "Key": 104, "Value": "Annan modul" }
+  ]
+}
