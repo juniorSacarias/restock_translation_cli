@@ -1,10 +1,12 @@
 # Upload the pending translations: keys first, then one _translations row per
-# language, then fill empty values (and different ones with --update).
+# language, then fill empty values (and different ones with --update, or the
+# ones chosen one by one with --review).
 #
 # Reads $TMP/diff.json (lib/diff.sh). Writes are sent one at a time; failures
 # are collected and reported at the end (exit code 1).
 
 FAILURES=()
+REVIEWED_COUNT=0
 
 # Plan files: to_create.ndjson (rows), keys_to_create.txt, to_update.ndjson,
 # key_ids.json (name -> Id, grows while keys are created).
@@ -18,11 +20,55 @@ prepare_push_plan() {
   CREATE_COUNT="$(wc -l <"$TMP/to_create.ndjson")"
   KEYS_COUNT="$(wc -l <"$TMP/keys_to_create.txt")"
   UPDATE_COUNT="$(wc -l <"$TMP/to_update.ndjson")"
-  if $UPDATE; then
-    SKIPPED_DIFFERENT=0
-  else
-    SKIPPED_DIFFERENT="$(jq '[.rows[] | select(.status == "different")] | length' "$TMP/diff.json")"
-  fi
+  DIFFERENT_COUNT="$(jq '[.rows[] | select(.status == "different")] | length' "$TMP/diff.json")"
+  RENAME_COUNT="$(jq '.renames // [] | length' "$TMP/diff.json")"
+  if $UPDATE; then SKIPPED_DIFFERENT=0; else SKIPPED_DIFFERENT=$DIFFERENT_COUNT; fi
+}
+
+# --review: asks for every DIFFERENT value whether to overwrite Ahamatic with
+# the local value. The chosen rows are added to to_update.ndjson.
+review_different() {
+  ((DIFFERENT_COUNT > 0)) || return 0
+  [[ -t 0 ]] || die '--review needs a terminal to ask for each value.'
+
+  echo
+  bold "Review $DIFFERENT_COUNT different values"
+  echo " $(dim 'l: use local · k: keep Ahamatic · a: local for the rest · s: keep the rest')"
+
+  local row index=0 choice rest=''
+  : >"$TMP/reviewed.ndjson"
+  while IFS= read -r row <&3; do
+    index=$((index + 1))
+    if [[ -n "$rest" ]]; then
+      choice="$rest"
+    else
+      echo
+      jq_file review_item -r --argjson index "$index" --argjson total "$DIFFERENT_COUNT" \
+        --argjson color "$COLOR" <<<"$row"
+      printf '  [l] local  [k] keep  [a] local for the rest  [s] keep the rest › '
+      while true; do
+        IFS= read -rsn1 choice </dev/tty || choice=s
+        case "${choice,,}" in
+          l | k) break ;;
+          a) rest=l; break ;;
+          s) rest=k; break ;;
+        esac
+      done
+      choice="${rest:-${choice,,}}"
+      case "$choice" in
+        l) echo "$(color 32 'use local')${rest:+ (and the rest)}" ;;
+        k) echo "$(dim 'keep Ahamatic')${rest:+ $(dim '(and the rest)')}" ;;
+      esac
+    fi
+    if [[ "$choice" == l ]]; then
+      echo "$row" >>"$TMP/reviewed.ndjson"
+    fi
+  done 3< <(jq -c '.rows[] | select(.status == "different")' "$TMP/diff.json")
+
+  REVIEWED_COUNT="$(wc -l <"$TMP/reviewed.ndjson")"
+  cat "$TMP/reviewed.ndjson" >>"$TMP/to_update.ndjson"
+  UPDATE_COUNT="$(wc -l <"$TMP/to_update.ndjson")"
+  SKIPPED_DIFFERENT=$((DIFFERENT_COUNT - REVIEWED_COUNT))
 }
 
 # Aborts before writing if the schemas require fields we do not send, or lack
@@ -46,11 +92,22 @@ check_schemas() {
 }
 
 print_push_plan() {
+  local updated='empty'
+  $UPDATE && updated+=' + different'
+  $REVIEW && updated+=" + $REVIEWED_COUNT reviewed"
+  echo
   bold "Plan for $API_URL (module $MODULE):"; echo
   echo "  • create $KEYS_COUNT keys in $KEY_ENTITY"
+  ((RENAME_COUNT == 0)) || echo "    $(color 33 "⚠ $RENAME_COUNT of them look like renamed Ahamatic keys (see Possible renames)")"
   echo "  • create $CREATE_COUNT translations in $TRANSLATIONS_ENTITY"
-  echo "  • update $UPDATE_COUNT translations (empty$($UPDATE && echo ' + different'))"
-  ((SKIPPED_DIFFERENT == 0)) || echo "  • leave $SKIPPED_DIFFERENT different values untouched (use --update to overwrite them)"
+  echo "  • update $UPDATE_COUNT translations ($updated)"
+  if ((SKIPPED_DIFFERENT > 0)); then
+    if $REVIEW; then
+      echo "  • keep $SKIPPED_DIFFERENT different values as they are in Ahamatic (your review)"
+    else
+      echo "  • leave $SKIPPED_DIFFERENT different values untouched (use --review to choose, or --update to overwrite them)"
+    fi
+  fi
 }
 
 # Returns 1 unless the user types "yes" (or --yes was given).
@@ -136,11 +193,14 @@ update_translations() {
 
 run_push() {
   prepare_push_plan
+  $REVIEW && review_different
 
-  echo
   if ((CREATE_COUNT == 0 && UPDATE_COUNT == 0)); then
+    echo
     green '✔ Nothing to push.'; echo
-    ((SKIPPED_DIFFERENT == 0)) || echo "  $SKIPPED_DIFFERENT different values were left untouched (use --update to overwrite them)."
+    if ((SKIPPED_DIFFERENT > 0)) && ! $REVIEW; then
+      echo "  $SKIPPED_DIFFERENT different values were left untouched (use --review to choose, or --update to overwrite them)."
+    fi
     return 0
   fi
 

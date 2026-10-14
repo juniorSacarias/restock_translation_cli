@@ -216,7 +216,22 @@ test_wrong_credentials_exit_with_auth_code() {
   export AHA_API_KEY=test-api-key AHA_EMAIL=svc@test.local AHA_PASSWORD=wrong
   run
   assert_status 3
-  assert_contains 'POST /api/auth/email → HTTP 401'
+  assert_contains 'POST /api/auth/email → HTTP 412: Incorrect combination of email and password'
+}
+
+test_wrong_api_key_exits_with_auth_code() {
+  export AHA_API_KEY=wrong-key AHA_EMAIL=svc@test.local AHA_PASSWORD=test-password
+  run
+  assert_status 3
+  assert_contains 'API Key is invalid'
+}
+
+test_account_with_two_factor_is_explained() {
+  with_credentials
+  reset_mock "$(state_with '.twoFactor = true')"
+  run
+  assert_status 1
+  assert_contains 'This account needs 2FA by email (svc@test.local)'
 }
 
 test_expired_token_exits_with_auth_code() {
@@ -315,6 +330,254 @@ test_diff_queries_like_the_app() {
   assert_eq "$(jq -r '.authorization' <<<"$request")" 'test-token'
 }
 
+test_reads_ahamatic_in_pages_of_100_by_default() {
+  with_credentials
+  run
+  local request
+  request="$(mock_log | jq -c '[.[] | select(.method == "GET" and .path == "/api/e/_translations")][0]')"
+  assert_eq "$(jq -r '[.query[] | select(.[0] == "limit")][0][1]' <<<"$request")" 100
+  assert_eq "$(jq -r '[.query[] | select(.[0] == "page")][0][1]' <<<"$request")" 1
+  assert_eq "$(jq '[.query[] | select(.[0] == "all")] | length' <<<"$request")" 0
+}
+
+test_reads_every_page() {
+  with_credentials
+  run --all --page-size=2
+  assert_status 0
+  # 5 translations of the module in pages of 2: 3 requests, same result as one page.
+  assert_eq "$(mock_log | jq -c '[.[] | select(.method == "GET" and .path == "/api/e/_translations")
+    | (.query[] | select(.[0] == "page") | .[1])]')" '["1","2","3"]'
+  assert_row hello en OK
+  assert_row bye da EMPTY
+  assert_row remote_only en 'ONLY AHAMATIC'
+  assert_contains 'da   NO KEY: 3   MISSING: 1   EMPTY: 1   OK: 1'
+}
+
+test_stops_when_a_page_comes_back_empty() {
+  with_credentials
+  reset_mock "$(state_with '.translations = []')"
+  run --page-size=2
+  assert_status 0
+  assert_eq "$(mock_log | jq '[.[] | select(.method == "GET" and .path == "/api/e/_translations")] | length')" 1
+}
+
+test_terminal_shows_loading_progress_per_page() {
+  with_credentials
+  tty_session "stty cols 120; cd $(printf '%q' "$PROJECT") && $(printf '%q' "$SCRIPT") --env=test --page-size=2" || return 0
+  assert_contains 'Logging in to Ahamatic…'
+  assert_contains 'Loading _translations… page 1/?'
+  assert_contains 'Loading _translations… page 3/3'
+  assert_contains '✔ _translations: 5 rows (3/3 pages)'
+  assert_contains '✔ Logged in to Ahamatic'
+}
+
+test_no_loading_progress_without_terminal() {
+  with_credentials
+  run
+  assert_not_contains 'Loading'
+  assert_not_contains 'Logged in'
+}
+
+test_slow_request_reports_timeout() {
+  with_credentials
+  reset_mock "$(state_with '.delay = {path: "/api/auth/email", seconds: 3}')"
+  run --timeout=1
+  assert_status 1
+  assert_contains 'POST /api/auth/email timed out after 1s: Ahamatic did not answer.'
+  assert_contains '--timeout=<seconds>'
+  assert_contains 'the login got stuck on the Ahamatic side'
+}
+
+test_slow_list_reports_timeout_without_login_hint() {
+  with_credentials
+  reset_mock "$(state_with '.delay = {path: "/api/e/_translations", seconds: 3}')"
+  run --timeout=1
+  assert_status 1
+  assert_contains 'GET /api/e/_translations timed out after 1s'
+  assert_not_contains 'login got stuck'
+}
+
+test_typed_email_and_api_key_are_trimmed() {
+  run_typed '  svc@test.local \r' 'test-password\r' ' test-api-key  \r' || return 0
+  assert_row orphan en MISSING
+  assert_eq "$(mock_log | jq -r '[.[] | select(.path == "/api/auth/email")][0].body | "\(.emailAddress)|\(.apiKey)"')" 'svc@test.local|test-api-key'
+}
+
+test_typed_password_is_not_trimmed() {
+  run_typed 'svc@test.local\r' ' test-password\r' 'test-api-key\r' || return 0
+  assert_eq "$(mock_log | jq -r '[.[] | select(.path == "/api/auth/email")][0].body.password')" ' test-password'
+}
+
+test_page_size_and_timeout_must_be_positive_numbers() {
+  run --page-size=0
+  assert_status 64
+  assert_contains '--page-size must be a positive number'
+  run --timeout=abc
+  assert_status 64
+  assert_contains '--timeout must be a positive number'
+}
+
+# run_with_arb JSON_EN: runs a diff with a one-file ARB folder (en) instead of the fixture.
+run_with_arb() {
+  local dir="$WORK/arb-$RANDOM"
+  mkdir -p "$dir"
+  printf '%s' "$1" >"$dir/app_en.arb"
+  shift
+  run --arb-dir="$dir" --locales=en "$@"
+}
+
+test_spaces_at_the_ends_are_visible_and_counted() {
+  with_credentials
+  run_with_arb '{"hello": "Hello ", "bye": "  Bye old"}'
+  assert_row hello en DIFFERENT
+  assert_contains '│ Hello␣ '
+  assert_contains '│ ␣␣Bye old '
+  assert_contains '2 DIFFERENT values only differ in spaces at the start/end (shown as ␣)'
+}
+
+test_no_break_spaces_and_tabs_are_visible() {
+  with_credentials
+  run_with_arb '{"hello": "Hel\u00a0lo", "bye": "Bye\told"}'
+  assert_contains 'Hel⍽lo'
+  assert_contains 'Bye→old'
+  assert_not_contains 'only differ in spaces'
+}
+
+test_spaces_inside_values_are_not_marked() {
+  with_credentials
+  run_with_arb '{"orphan": "An orphan key"}'
+  assert_contains '│ An orphan key '
+  assert_not_contains '␣'
+}
+
+# ---- Possible renames --------------------------------------------------------
+
+test_no_possible_renames_section_when_nothing_matches() {
+  with_credentials
+  run
+  assert_not_contains 'Possible renames'
+}
+
+test_possible_rename_by_same_text() {
+  with_credentials
+  reset_mock "$(state_with '.keys += [{Id: 105, Name: "onlyEnglishText", Module: "falckWebApp"}]
+    | .translations += [{Id: 8, Module: "falckWebApp", Language: 11, Key: 105, Value: "only english "}]')"
+  run
+  assert_contains 'Possible renames'
+  # Same text ignoring case and spaces at the ends.
+  grep -qE '^  only_en +→ onlyEnglishText \(same text: en\)$' <<<"$OUT" || fail 'missing only_en → onlyEnglishText'
+}
+
+test_possible_rename_by_same_name() {
+  with_credentials
+  reset_mock "$(state_with '.keys += [{Id: 106, Name: "NewKey", Module: "falckWebApp"}, {Id: 107, Name: "SPECIAL", Module: "falckWebApp"}]
+    | .translations += [{Id: 9, Module: "falckWebApp", Language: 11, Key: 106, Value: "Other text"}]')"
+  run
+  # Name matches even when the text differs, and for keys without translations.
+  grep -qE '^  new_key +→ NewKey \(same name\)$' <<<"$OUT" || fail 'missing new_key → NewKey'
+  grep -qE '^  special +→ SPECIAL \(same name\)$' <<<"$OUT" || fail 'missing special → SPECIAL'
+}
+
+test_no_possible_rename_when_another_language_differs() {
+  with_credentials
+  reset_mock "$(state_with '.keys += [{Id: 108, Name: "failText", Module: "falckWebApp"}]
+    | .translations += [{Id: 10, Module: "falckWebApp", Language: 11, Key: 108, Value: "Fail"},
+                        {Id: 11, Module: "falckWebApp", Language: 12, Key: 108, Value: "Andet"}]')"
+  run
+  assert_not_contains 'failText ('
+}
+
+test_push_plan_warns_about_possible_renames() {
+  with_credentials
+  reset_mock "$(state_with '.keys += [{Id: 105, Name: "onlyEnglishText", Module: "falckWebApp"}]
+    | .translations += [{Id: 8, Module: "falckWebApp", Language: 11, Key: 105, Value: "Only English"}]')"
+  run push --dry-run
+  assert_contains '⚠ 1 of them look like renamed Ahamatic keys (see Possible renames)'
+}
+
+# ---- push --review ------------------------------------------------------------
+
+# run_review KEYS...: `push --review --yes` in a pseudo terminal, typing KEYS.
+run_review() {
+  tty_session "stty cols 120; cd $(printf '%q' "$PROJECT") && $(printf '%q' "$SCRIPT") --env=test push --review --yes" "$@"
+}
+
+# Three different values: bye en (Id 3), hello da (Id 2), hello en (Id 1).
+THREE_DIFFERENT='.translations |= map(if .Id == 1 then .Value = "Hi" elif .Id == 2 then .Value = "Hejsa" else . end)'
+
+test_review_shows_both_values_and_uses_local_when_asked() {
+  with_credentials
+  run_review l || return 0
+  assert_contains '(1/1) bye [en]'
+  assert_contains 'Local     Bye'
+  assert_contains 'Ahamatic  Bye old'
+  assert_contains 'use local'
+  assert_contains 'update 2 translations (empty + 1 reviewed)'
+  grep -qF 'PUT /api/e/_translations/3 {"Value":"Bye"}' <<<"$(writes)" || fail 'chosen value not written'
+}
+
+test_review_keep_leaves_ahamatic_value() {
+  with_credentials
+  run_review k || return 0
+  assert_contains 'keep Ahamatic'
+  assert_contains 'keep 1 different values as they are in Ahamatic (your review)'
+  ! grep -qF 'PUT /api/e/_translations/3' <<<"$(writes)" || fail 'kept value was overwritten'
+}
+
+test_review_local_for_the_rest() {
+  with_credentials
+  reset_mock "$(state_with "$THREE_DIFFERENT")"
+  run_review k a || return 0
+  assert_contains '(2/3) hello [da]'
+  assert_not_contains '(3/3)'
+  local w
+  w="$(writes)"
+  ! grep -qF 'PUT /api/e/_translations/3' <<<"$w" || fail 'bye was kept, but written'
+  grep -qF 'PUT /api/e/_translations/2 {"Value":"Hej"}' <<<"$w" || fail 'hello da not written'
+  grep -qF 'PUT /api/e/_translations/1 {"Value":"Hello"}' <<<"$w" || fail 'hello en not written'
+}
+
+test_review_keep_the_rest() {
+  with_credentials
+  reset_mock "$(state_with "$THREE_DIFFERENT")"
+  run_review s || return 0
+  assert_not_contains '(2/3)'
+  assert_contains 'keep 3 different values as they are in Ahamatic (your review)'
+  [[ "$(writes)" != *'PUT /api/e/_translations/1 '* && "$(writes)" != *'PUT /api/e/_translations/3 '* ]] ||
+    fail 'a kept value was written'
+}
+
+test_review_points_out_space_only_differences() {
+  with_credentials
+  reset_mock "$(state_with '.translations |= map(if .Id == 3 then .Value = "Bye " else . end)')"
+  run_review k || return 0
+  assert_contains 'only spaces at the start/end differ'
+  assert_contains 'Ahamatic  Bye␣'
+}
+
+test_review_needs_a_terminal() {
+  with_credentials
+  run push --review --yes
+  assert_status 1
+  assert_contains '--review needs a terminal'
+  assert_no_writes
+}
+
+test_review_and_update_cannot_be_combined() {
+  run push --review --update
+  assert_status 64
+  assert_contains '--update and --review cannot be used together'
+}
+
+test_exec_review_option_asks_for_each_value() {
+  with_credentials
+  run_exec 4 1 l 'no\r' q || return 0
+  assert_choice 'What do you want to do\?' 'Review values that differ'
+  assert_contains '(1/1) bye [en]'
+  assert_contains 'Aborted.'
+  assert_no_writes
+}
+
 test_locale_without_app_language_is_skipped_with_warning() {
   with_credentials
   run
@@ -354,12 +617,14 @@ test_token_without_key_entity_cannot_tell_missing_from_no_key() {
   assert_row orphan en 'NO KEY'
 }
 
-test_duplicated_remote_translations_warn_and_use_first() {
+test_duplicated_remote_translations_warn_and_use_the_newest() {
   with_credentials
   reset_mock "$(state_with '.translations += [{Id: 7, Module: "falckWebApp", Language: 11, Key: 100, Value: "Hello duplicate"}]')"
   run --all
-  assert_contains '1 duplicated translations in Ahamatic'
-  assert_row hello en OK
+  assert_contains '1 duplicated translations in Ahamatic (same key + language); the newest one is used, like the app does.'
+  # Id 7 is newer than Id 1 ("Hello"), so it is the one compared.
+  assert_row hello en DIFFERENT
+  assert_contains 'Hello duplicate'
 }
 
 test_everything_in_sync() {
@@ -552,7 +817,8 @@ test_tty_wide_does_not_truncate() {
   command -v script >/dev/null || return 0
   with_credentials
   run_tty '' 70 --wide
-  assert_not_contains '…'
+  # Only the table: the loading messages also use "…".
+  ! grep '│' <<<"$OUT" | grep -q '…' || fail 'a table value was truncated with --wide'
 }
 
 test_tty_confirmation_other_than_yes_aborts() {
@@ -885,6 +1151,16 @@ test_exec_remembers_credentials_between_runs() {
   run_exec 1 1 'svc@test.local\r' 'test-password\r' 'test-api-key\r' "$ENTER" 2 1 q || return 0
   assert_eq "$(grep -c 'Ahamatic credentials' <<<"$OUT")" 1
   assert_contains 'Dry run: nothing was written.'
+}
+
+test_exec_ctrl_c_cancels_the_run_and_returns_to_the_menu() {
+  with_credentials
+  reset_mock "$(state_with '.delay = {path: "/api/e/_translations", seconds: 4}')"
+  run_exec 1 1 '\003' "$ENTER" q || return 0
+  assert_contains 'Cancelled.'
+  # The menu is shown again after the cancelled run.
+  assert_eq "$(grep -c 'What do you want to do? ↑/↓' <<<"$OUT")" 2
+  assert_not_contains 'Summary'
 }
 
 test_exec_skips_credentials_prompt_when_available() {

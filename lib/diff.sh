@@ -41,7 +41,7 @@ compute_diff() {
 
   local duplicates
   duplicates="$(jq '.duplicates' "$TMP/diff.json")"
-  ((duplicates == 0)) || warn "$duplicates duplicated translations in Ahamatic (same key + language); the first one is used."
+  ((duplicates == 0)) || warn "$duplicates duplicated translations in Ahamatic (same key + language); the newest one is used, like the app does."
 }
 
 # Width of the controlling terminal, 0 when unknown. Call it only when stdout

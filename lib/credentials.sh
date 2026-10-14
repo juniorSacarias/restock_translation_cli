@@ -8,24 +8,26 @@ has_credentials() {
 }
 
 # Asks for the missing ones in /dev/tty. Password and API key are not echoed.
+# Email and API key are trimmed (a pasted trailing space breaks the login);
+# the password is kept exactly as typed.
 prompt_credentials() {
   has_credentials && return 0
   echo
   bold 'Ahamatic credentials'; echo " $(dim '(only kept in memory while this runs)')"
   local value
   if [[ -z "${AHA_EMAIL:-}" ]]; then
-    read -rp '  Email: ' value </dev/tty
-    export AHA_EMAIL="$value"
+    IFS= read -rp '  Email: ' value </dev/tty
+    export AHA_EMAIL="$(trim "$value")"
   fi
   if [[ -z "${AHA_PASSWORD:-}" ]]; then
-    read -rsp '  Password: ' value </dev/tty
+    IFS= read -rsp '  Password: ' value </dev/tty
     echo
     export AHA_PASSWORD="$value"
   fi
   if [[ -z "${AHA_API_KEY:-}" ]]; then
-    read -rsp '  App API key: ' value </dev/tty
+    IFS= read -rsp '  App API key: ' value </dev/tty
     echo
-    export AHA_API_KEY="$value"
+    export AHA_API_KEY="$(trim "$value")"
   fi
 }
 

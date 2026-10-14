@@ -2,7 +2,7 @@
 #
 # Globals set by parse_sync_args: COMMAND, PROJECT_DIR, ENV_NAME, ENV_FILE,
 # MODULE, ARB_DIR, LOCALES, SHOW_ALL, WIDE, UPDATE, DRY_RUN, YES, KEY_ENTITY,
-# SCHEMA_NAME.
+# SCHEMA_NAME, PAGE_SIZE, REQUEST_TIMEOUT, REVIEW.
 
 bad_usage() {
   echo "$1" >&2
@@ -22,10 +22,13 @@ parse_sync_args() {
   SHOW_ALL=false
   WIDE=false
   UPDATE=false
+  REVIEW=false
   DRY_RUN=false
   YES=false
   KEY_ENTITY=''
   SCHEMA_NAME=''
+  PAGE_SIZE=100
+  REQUEST_TIMEOUT=60
 
   local arg name value
   while (($#)); do
@@ -36,10 +39,13 @@ parse_sync_args() {
       --all) SHOW_ALL=true ;;
       --wide) WIDE=true ;;
       --update) UPDATE=true ;;
+      --review) REVIEW=true ;;
       --dry-run) DRY_RUN=true ;;
       --yes) YES=true ;;
       --project | --env | --env-file | --module | --arb-dir | --locales | --key-entity | --schema | \
-        --project=* | --env=* | --env-file=* | --module=* | --arb-dir=* | --locales=* | --key-entity=* | --schema=*)
+        --page-size | --timeout | \
+        --project=* | --env=* | --env-file=* | --module=* | --arb-dir=* | --locales=* | --key-entity=* | --schema=* | \
+        --page-size=* | --timeout=*)
         name="${arg%%=*}"
         if [[ "$arg" == *=* ]]; then
           value="${arg#*=}"
@@ -58,6 +64,10 @@ parse_sync_args() {
           --locales) LOCALES="$value" ;;
           --key-entity) KEY_ENTITY="$value" ;;
           --schema) SCHEMA_NAME="$value" ;;
+          --page-size | --timeout)
+            [[ "$value" =~ ^[1-9][0-9]*$ ]] || bad_usage "$name must be a positive number"
+            if [[ "$name" == --page-size ]]; then PAGE_SIZE="$value"; else REQUEST_TIMEOUT="$value"; fi
+            ;;
         esac
         ;;
       *) bad_usage "Unknown argument $arg" ;;
@@ -65,6 +75,9 @@ parse_sync_args() {
     shift
   done
 
+  if $UPDATE && $REVIEW; then
+    bad_usage '--update and --review cannot be used together (--update overwrites every different value).'
+  fi
   if [[ -z "$PROJECT_DIR" && (-z "$ENV_FILE" || -z "$ARB_DIR") ]]; then
     die 'Restock project not found. Run from the Restock repo root or pass --project=<path>.'
   fi

@@ -66,7 +66,8 @@ cmd_exec() {
     select_option 'What do you want to do?' \
       'Show what is missing in Ahamatic|diff · read-only' \
       'Preview the upload|push --dry-run · read-only' \
-      'Upload missing translations|push · asks before writing' || return 0
+      'Upload missing translations|push · asks before writing' \
+      'Review values that differ|push --review · one by one, asks before writing' || return 0
     action=$SELECTED
 
     select_option 'Environment?' "${labels[@]}" || return 0
@@ -78,13 +79,20 @@ cmd_exec() {
       0) args=(diff) ;;
       1) args=(push --dry-run) ;;
       2) args=(push) ;;
+      3) args=(push --review) ;;
     esac
 
-    # A separate process: an error there ends that run, not the menu.
+    # A separate process: an error there ends that run, not the menu. Ctrl+C
+    # stops that run (it gets the SIGINT) and comes back to the menu.
     echo
     status=0
+    trap 'status=130' INT
     "$TOOL_DIR/translation" "${args[@]}" --project="$PROJECT" --env="$name" || status=$?
-    if ((status == EXIT_AUTH)); then
+    trap 'printf "\033[?25h\n"; exit 130' INT
+    if ((status == 130)); then
+      printf '\r\033[2K'
+      warn 'Cancelled.'
+    elif ((status == EXIT_AUTH)); then
       forget_credentials
       warn 'Ahamatic rejected the credentials; they will be asked again.'
     fi

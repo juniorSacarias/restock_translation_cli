@@ -31,12 +31,16 @@ Options (diff/push):
   --wide             Do not truncate values in the table.
   --update           push: also overwrite Ahamatic values that differ from the
                      local ones (by default only missing/empty are written).
+  --review           push: ask for each value that differs whether to overwrite
+                     it with the local one or keep Ahamatic's.
   --dry-run          push: show the plan and stop before writing.
   --yes              push: skip the confirmation prompt.
   --key-entity=<id>  Ahamatic entity referenced by _translations.Key. Discovered
                      from the schema when logging in with credentials.
   --schema=<name>    Application SchemaName, to discover --key-entity when
                      authenticating with a token.
+  --page-size=<n>    Rows per request when reading from Ahamatic. Default: 100
+  --timeout=<s>      Seconds before a request to Ahamatic is given up. Default: 60
   -h, --help         Show this help.
 
 Credentials:
@@ -51,6 +55,7 @@ Examples:
   translation exec ~/Documentos/Volenday/Restock
   cd ~/Documentos/Volenday/Restock && translation diff --all
   translation push --dry-run
+  translation push --review
   translation push --env=production
 TEXT
 }

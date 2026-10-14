@@ -7,10 +7,11 @@ The Restock source of truth is the ARB files (`lib/l10n/arb/app_<locale>.arb`). 
 ```
 Restock translations ⇄ Ahamatic  ~/Documentos/Volenday/Restock
 
-What do you want to do? ↑/↓ Enter · 1-3 · q quit
+What do you want to do? ↑/↓ Enter · 1-4 · q quit
   ❯ 1. Show what is missing in Ahamatic   diff · read-only
     2. Preview the upload                 push --dry-run · read-only
     3. Upload missing translations        push · asks before writing
+    4. Review values that differ          push --review · one by one, asks before writing
 ```
 
 ## Contents
@@ -63,7 +64,15 @@ cd <path to>/restock-translation-script
 ./translation install
 ```
 
-This links the command into `~/.local/bin`. On Ubuntu that folder is added to the `PATH` by `~/.profile` at login. If `translation` is not found, open a new terminal or run `source ~/.profile`.
+This links the command into `~/.local/bin`. If that folder is not on your `PATH`, `install` tells you why and asks whether to add this line to `~/.bashrc` (`~/.zshrc` for zsh):
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Answer `y`, then open a new terminal or run `source ~/.bashrc`. Nothing is changed if you answer `n`; you can add the line yourself or call `~/.local/bin/translation` with its full path.
+
+On Ubuntu, `~/.profile` already adds `~/.local/bin`, but bash does not read `~/.profile` when a `~/.bash_profile` exists. That is the usual reason the command is not found.
 
 ```sh
 translation help
@@ -74,9 +83,9 @@ translation help
 The tool asks for them every time it starts:
 
 - **Email** and **password** of the Ahamatic service account that Restock uses.
-- **App API key**: the Ahamatic application API key.
+- **App API key**: the API key of the Ahamatic application. It is required by the login: it tells Ahamatic which application (database and schema) the email and password belong to. It is not needed when you use a token (`AHA_TOKEN`).
 
-Ask the team lead if you do not have them. They are only kept in memory while the tool runs and are never written to disk. The password and API key are not shown while you type them.
+Ask the team lead if you do not have them. Spaces around the email and API key are removed (the password is sent exactly as typed). They are only kept in memory while the tool runs and are never written to disk. The password and API key are not shown while you type them.
 
 ### 5. Run it
 
@@ -87,8 +96,10 @@ translation exec
 1. **Restock project folder.** Type the path of your Restock checkout; Tab completes paths. If you start the tool from inside Restock, the path is already filled in and you just press Enter. You can also pass it directly: `translation exec ~/Documentos/Volenday/Restock`.
 2. Choose **1. Show what is missing in Ahamatic**, then **development**, and type your credentials. Nothing is written; you get the table.
 3. Choose **2. Preview the upload** to see how many keys and translations would be created.
-4. Choose **3. Upload missing translations** and type `yes` to write them.
-5. Run **1** again: there should be nothing pending (except `DIFFERENT` values, see below).
+4. Check the **Possible renames** section under the table before uploading (see [What the table means](#what-the-table-means)).
+5. Choose **3. Upload missing translations** and type `yes` to write them.
+6. To decide about the `DIFFERENT` values, choose **4. Review values that differ**: for each one you choose the local value or Ahamatic's.
+7. Run **1** again: there should be nothing pending, except the `DIFFERENT` values you kept.
 
 Within the same menu session the credentials are asked only once. If Ahamatic rejects them, they are forgotten and asked again on the next action.
 
@@ -107,6 +118,7 @@ translation exec ~/path/to/Restock     # skips that question
 | Enter | choose |
 | 1–9 | choose that option directly |
 | q or Esc | quit |
+| Ctrl+C while an action runs | cancel that action and go back to the menu |
 
 After the action you pick the environment (development, staging or production, shown with their API URL). When the run finishes, Enter goes back to the menu.
 
@@ -121,7 +133,8 @@ translation diff --all                 # also rows in sync and keys only in Aham
 translation diff --env=production --wide
 translation push --dry-run             # plan, nothing written
 translation push                       # upload (asks you to type "yes")
-translation push --update              # also overwrite values that differ
+translation push --review              # choose one by one which different values to overwrite
+translation push --update              # overwrite every value that differs
 translation push --yes                 # no prompt (CI / scripts)
 translation diff --project=~/path/to/Restock
 ```
@@ -148,13 +161,37 @@ Without a terminal (CI, scripts) nothing can be asked: put the credentials in en
 | `NO KEY` | The key does not exist in Ahamatic | creates the key and its translation |
 | `MISSING` | The key exists, but has no translation for that language | creates the translation |
 | `EMPTY` | The translation exists with an empty value | fills it |
-| `DIFFERENT` | The Ahamatic value differs from the local one | nothing, unless `--update` |
+| `DIFFERENT` | The Ahamatic value differs from the local one | nothing, unless you choose it with `--review` or use `--update` (all) |
 | `OK` | Same value (only with `--all`) | nothing |
 | `ONLY AHAMATIC` | The key is in Ahamatic but not in the ARB files (only with `--all`) | nothing (it never deletes) |
 
-`DIFFERENT` is not overwritten by default because the value may have been edited in Ahamatic on purpose.
+`DIFFERENT` is not overwritten by default because the value may have been edited in Ahamatic on purpose (a typo fixed, a better wording). With `push --review` (menu option 4) each one is shown with both values:
 
-There is one row per key and language. A locale without an `AppLanguages` row in the module (for example `sv`) is skipped with a warning. Line breaks in values are shown as `\n`, and long values are cut to fit the terminal (`--wide` disables that).
+```
+(2/18) checkout_label [da]
+  Local     Levering
+  Ahamatic  Betaling
+  [l] local  [k] keep  [a] local for the rest  [s] keep the rest ›
+```
+
+`l` writes the local value, `k` keeps Ahamatic's, `a` / `s` apply that to all the remaining ones. The plan then shows how many were chosen, and you still confirm with `yes` before anything is written.
+
+### Possible renames
+
+When a new local key (`NO KEY`) looks like a key that only exists in Ahamatic (`ONLY AHAMATIC`), it is listed under the table:
+
+```
+Possible renames · new keys that look like an Ahamatic key with another name
+  appbar_homeLabel  → appBarHomeLabel (same name)
+  only_en           → onlyEnglishText (same text: en)
+```
+
+- **same name**: the names are equal ignoring case, `_`, `-` and `.`.
+- **same text**: the texts are equal (ignoring case and spaces at the ends) in every language both keys have.
+
+Up to 3 candidates are shown per key. The `push` plan warns how many of the keys to create are in this list. The tool does not rename anything: renaming a key in Ahamatic would break app versions that still use the old name. Decide with the team which name is right, then rename the ARB key or the Ahamatic key before pushing.
+
+There is one row per key and language. A locale without an `AppLanguages` row in the module (for example `sv`) is skipped with a warning. Line breaks in values are shown as `\n`, and long values are cut to fit the terminal (`--wide` disables that). Invisible characters are made visible, because they make values differ: spaces at the start or end are shown as `␣`, no-break spaces as `⍽` and tabs as `→`. The summary says how many `DIFFERENT` values only differ in those spaces. Such spaces are often intentional in Restock, where a text is joined to the next one (`"Fortsæt "` + `"med at shoppe"`).
 
 ## Command and option reference
 
@@ -177,11 +214,14 @@ There is one row per key and language. A locale without an `AppLanguages` row in
 | `--locales=en,da` | all ARB files | Only these locales |
 | `--all` | | Also show `OK` and `ONLY AHAMATIC` rows |
 | `--wide` | | Do not truncate values |
-| `--update` | | `push`: also overwrite `DIFFERENT` values |
+| `--update` | | `push`: also overwrite every `DIFFERENT` value |
+| `--review` | | `push`: ask for each `DIFFERENT` value whether to overwrite it (not with `--update`) |
 | `--dry-run` | | `push`: show the plan and stop |
 | `--yes` | | `push`: no confirmation prompt |
 | `--key-entity=<id>` | from the schema | Entity referenced by `_translations.Key` |
 | `--schema=<name>` | from the login | Application `SchemaName`, to discover the key entity when using `AHA_TOKEN` |
+| `--page-size=<n>` | `100` | Rows per request when reading from Ahamatic |
+| `--timeout=<s>` | `60` | Seconds before a request to Ahamatic is given up |
 
 Optional environment variables (they are not needed in the terminal):
 
@@ -198,16 +238,16 @@ Exit codes: `0` success, `1` error or some upload failed, `3` Ahamatic rejected 
 
 The calls are the same the app makes (`lib/src/data/apis/translation_api.dart` in Restock), plus the writes.
 
-1. **Login.** `POST /api/auth/email` returns the token and the application `SchemaName`. With `AHA_TOKEN` this step is skipped.
+1. **Login.** `POST /api/auth/email` with `{apiKey, emailAddress, password}` returns the token and the application `SchemaName`. The API key selects the application; wrong values answer `412` (not 401). With `AHA_TOKEN` this step is skipped.
 2. **Languages.** `GET /api/e/AppLanguages?filter[Module]=<module>` maps each ARB locale to its `AppLanguages.Id`, matched on `Language.Code`. That Id is what `_translations.Language` stores.
 3. **Key entity.** `GET /api/entities/_translations?collection=<SchemaName>` returns the schema. The `ref` of its `Key` field is the translation keys entity.
-4. **Remote data.** `GET /api/e/_translations?filter[Module]=…&fields[]=…` returns the translations, with `Key` and `Language` populated. `GET /api/e/<key entity>?filter[Module]=…` returns the keys, including those without any translation yet.
+4. **Remote data.** `GET /api/e/_translations?filter[Module]=…&fields[]=…` returns the translations, with `Key` and `Language` populated. `GET /api/e/<key entity>?filter[Module]=…` returns the keys, including those without any translation yet. Every list is read in pages (`page=N&limit=100`) until `totalPages` / `end`, instead of one `all=true` request. Each request stays small and fast, and in a terminal a spinner shows the progress (`⠹ Loading _translations… page 3/8`). Rows come in API order (`_id DESC`), so with duplicated translations the newest one is used, the same one the app shows.
 5. **Compare.** Builds one row per key and language (`lib/jq/diff.jq`) and prints the table (`lib/jq/table.jq`).
 6. **Push**, in this order:
    1. Check the schemas: abort if an entity requires a field the tool does not send.
    2. `POST /api/e/<key entity>` with `{Name, Module}` for every `NO KEY`. The response gives the new key `Id`.
    3. `POST /api/e/_translations` with `{Module, Language: <AppLanguages Id>, Key: <key Id>, Value}` for every `NO KEY` and `MISSING` row.
-   4. `PUT /api/e/_translations/<id>` with `{Value}` for `EMPTY`, and for `DIFFERENT` when `--update` is given.
+   4. `PUT /api/e/_translations/<id>` with `{Value}` for `EMPTY`, and for `DIFFERENT` when `--update` is given or when chosen in `--review`.
 
 Things learnt from the aha-api code that the tool relies on:
 
@@ -223,23 +263,26 @@ Things learnt from the aha-api code that the tool relies on:
 - **Schema check.** Before writing, it checks the fields against the Ahamatic schemas and aborts with nothing written if they do not match.
 - **Nothing is deleted.** Values that differ are only overwritten with `--update`.
 - **Partial failures.** If a key cannot be created, its translations are skipped. Every failure is listed at the end, and the exit code is 1. Running `push` again retries only what is still missing.
-- **Nothing left on the computer.** Credentials are asked in the terminal and only kept in memory (exported to the running process) until it ends; the password and API key are not echoed and never printed. Temporary files are deleted on exit. The tool does not write any config or cache (only `translation install` creates the `~/.local/bin/translation` link).
+- **Nothing left on the computer.** Credentials are asked in the terminal and only kept in memory (exported to the running process) until it ends; the password and API key are not echoed and never printed. Temporary files are deleted on exit. The tool does not write any config or cache (only `translation install` creates the `~/.local/bin/translation` link and, if you accept, adds one `PATH` line to your shell rc file).
 
 ## Troubleshooting
 
 | Message | Cause / fix |
 |---|---|
-| `translation: command not found` | Open a new terminal or `source ~/.profile` after `./translation install`; check `~/.local/bin` is in `PATH`. |
+| `translation: command not found` | `~/.local/bin` is not on the `PATH` (common when `~/.bash_profile` exists). Run `./translation install` again and answer `y`, then open a new terminal or `source ~/.bashrc`. |
 | `Restock project not found` / `.../.env.development not found` | `cd` into Restock, pass `--project=<path>` or set `TRANSLATION_PROJECT`. |
 | `<path> is not a Restock project` | The folder has no `lib/l10n/arb`: point to the repo root of Restock. |
 | `No Ahamatic credentials: run it in a terminal…` | Running without a terminal: set the credentials as environment variables. |
-| `POST /api/auth/email → HTTP 401` | Wrong email, password or API key, or the account needs 2FA. In the menu they are asked again. |
+| `POST /api/auth/email → HTTP 412: Incorrect combination of email and password` / `API Key is invalid` | Wrong credentials (exit code 3). In the menu they are forgotten and asked again. |
+| `This account needs 2FA by email` | The account has email 2FA; use the Ahamatic service account, which is exempt. |
 | `HTTP 401 Failed to authenticate token` | `AHA_TOKEN` expired (180 min by default). Get a new one or use email/password. |
 | `No AppLanguages row for "xx"` | That ARB locale is not configured for the module in Ahamatic. Add it there, or ignore it. |
 | `Could not find the Key reference ... pass --key-entity` | The schema could not be read. Pass `--key-entity=<entity>` (the translation keys entity). |
 | `Unknown translation key entity` | You are using `AHA_TOKEN`: also pass `--schema=<SchemaName>` or `--key-entity=<entity>`. |
 | `Schema mismatch, nothing written` | The Ahamatic schema changed (a new required field, or a renamed one). Update `lib/push.sh`. |
 | `No terminal to confirm` | `push` in CI or a pipe: add `--yes`. |
+| `… timed out after 60s: Ahamatic did not answer` | Ahamatic took too long. The spinner shows which step was waiting (login, a page, the schema). Try again; if it is a list, use a smaller `--page-size`; otherwise raise `--timeout`. |
+| `POST /api/auth/email timed out` | Ahamatic answers wrong credentials immediately (412), so a login that hangs usually means the password was accepted and Ahamatic got stuck afterwards (it saves a refresh token in its central database). It is on the Ahamatic side: try again later or report it to the aha-api team. |
 | jq `syntax error` / `compile error` | jq is too old; install 1.7+. |
 | The table wraps or looks misaligned | Make the terminal wider, or use `--wide` and scroll. |
 
@@ -266,8 +309,10 @@ restock-translation-script/
 │       ├── local_translations.jq   ARB files → {locale: {key: value}}
 │       ├── language_ids.jq         locale → AppLanguages.Id
 │       ├── entity_fields.jq        Ahamatic schema → {field: definition}
-│       ├── diff.jq                 Comparison rows and statuses
-│       ├── table.jq                Table and summary rendering
+│       ├── text.jq                 Shared text helpers (visible spaces, strip, same text/name)
+│       ├── diff.jq                 Comparison rows, statuses and possible renames
+│       ├── table.jq                Table, possible renames and summary rendering
+│       ├── review_item.jq          One value in `push --review`
 │       └── schema_problems.jq      Required/unknown fields check
 ├── tests/
 │   ├── run_tests.sh        Test runner and test cases
@@ -301,6 +346,8 @@ Intermediate data goes to JSON files in a temp dir (`$TMP`). The temp dir is rem
 | A new option | `lib/usage.sh` (help) + `lib/args.sh` (parsing), then use the global where needed |
 | How statuses are decided | `lib/jq/diff.jq` |
 | Table columns, colors, summary | `lib/jq/table.jq` |
+| How possible renames are detected | `lib/jq/diff.jq` (`$renames`), `sameTextKey` / `sameNameKey` in `lib/jq/text.jq` |
+| The `--review` questions | `review_different` in `lib/push.sh`, `lib/jq/review_item.jq` |
 | An Ahamatic endpoint or header | `lib/ahamatic.sh` |
 | The fields sent when creating keys or translations | `lib/push.sh` (`create_keys`, `create_translations`) and the field lists in `check_schemas` |
 | Menu options or texts | `lib/menu.sh` |
@@ -312,7 +359,7 @@ Intermediate data goes to JSON files in a temp dir (`$TMP`). The temp dir is rem
 Conventions:
 
 - **Bash style.** `set -euo pipefail` is set in `translation`. Use `local` in functions, quote every expansion, and use `die` for fatal errors and `warn` for warnings.
-- **JSON in `.jq` files.** Put JSON processing in `lib/jq/*.jq` and run it with `jq_file <name> …`, instead of long jq strings in bash.
+- **JSON in `.jq` files.** Put JSON processing in `lib/jq/*.jq` and run it with `jq_file <name> …`, instead of long jq strings in bash. Shared helpers live in `lib/jq/text.jq`; use them with `include "text";` at the top of a program (`jq_file` passes `-L lib/jq`).
 - **Reading from the terminal.** Interactive code reads keys from `/dev/tty`. Check `[[ -t 1 ]]` in the caller, not inside a `$(...)`: inside it, stdout is a pipe.
 - **New modules.** Add them to the `for module in …` list in `translation`.
 - **Tests.** Every behaviour change gets a test (see below).
@@ -342,10 +389,13 @@ What is covered:
   - keys before translations, and translations using the new key Ids;
   - special characters sent unchanged;
   - `EMPTY` filled and `DIFFERENT` kept, or overwritten with `--update`;
+  - `--review`: both values shown, local / keep / local for the rest / keep the rest, space-only differences pointed out, needs a terminal, not combinable with `--update`;
   - a failing key, idempotency (a second push writes nothing), key entity discovery;
   - schema mismatch aborts without writing.
+- **Possible renames:** by same text (case and end spaces ignored), by same name (also for keys without translations), not when another language differs, none when nothing matches, warning in the push plan.
+- **Paging and progress:** pages of 100 by default, every page read and merged, stop on an empty page, the `page N/M` spinner only in a terminal, timeouts reported, `--page-size` / `--timeout` validated.
 - **Terminal:** the table fits the width, `--wide`, the confirmation prompt, and `PRODUCTION` highlighted.
-- **`translation` command and menu:** subcommands and `install`. The `exec` menu is driven with real key presses in a pseudo terminal:
+- **`translation` command and menu:** subcommands; `install` (link, `PATH` already fine, line only printed without a terminal, added to `~/.bashrc` once when accepted, untouched when declined, `~/.zshrc` for zsh). The `exec` menu is driven with real key presses in a pseudo terminal:
   - the project folder prompt (typed, prefilled, not Restock, empty to quit, given as argument);
   - arrows, j/k, numbers, q, Esc, back to the menu;
   - credentials asked once per session, without echo, and asked again after being rejected.
@@ -366,7 +416,7 @@ To add a test, add a `test_<name>()` function to `tests/run_tests.sh`. It runs i
 
 ## Known limitations
 
-- **Speed.** Requests are sent one at a time. Uploading a few hundred translations takes a couple of minutes.
+- **Speed.** Requests are sent one at a time (reads in pages of 100). Uploading a few hundred translations takes a couple of minutes.
 - **Concurrent runs.** Ahamatic does not prevent duplicates, so do not run two `push` at the same time against the same environment.
 - **No deletions.** Keys that only exist in Ahamatic are listed with `--all`, but never removed.
 - **Plural forms.** ICU plural/select messages are compared and uploaded as plain strings, exactly as written in the ARB file.

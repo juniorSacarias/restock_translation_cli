@@ -1,6 +1,8 @@
-# diff.json -> table and per-locale summary (raw output lines).
+# diff.json -> table, possible renames and per-locale summary (raw output lines).
 # Args: $all (show ok/extra rows), $wide (no truncation), $cols (terminal
 # width, 0 = unknown), $color (ANSI colors).
+
+include "text";
 
 def labels: {missingKey: "NO KEY", missing: "MISSING", empty: "EMPTY", different: "DIFFERENT", ok: "OK", extra: "ONLY AHAMATIC"};
 def pending: IN("missingKey", "missing", "empty", "different");
@@ -12,7 +14,7 @@ def paintStatus($status):
   else paint(2) end;
 def spaces($n): if $n > 0 then " " * $n else "" end;
 def truncate($w): if length <= $w then . else .[0:$w - 1] + "…" end;
-def oneLine: gsub("\r"; "") | gsub("\n"; "\\n");
+def reason: if .sameName then "same name" else "same text: \(.sameText | join(", "))" end;
 
 .rows as $rows
 | ($rows | map(select($all or (.status | pending)))) as $visible
@@ -21,7 +23,7 @@ def oneLine: gsub("\r"; "") | gsub("\n"; "\\n");
   else
     ["#", "Key", "Lang", "Status", "Local", "Ahamatic"] as $headers
     | [ $visible | to_entries[] | .value as $r
-        | ["\(.key + 1)", $r.key, $r.locale, labels[$r.status], ($r.local // "—" | oneLine), ($r.remote // "—" | oneLine)] ] as $cells
+        | ["\(.key + 1)", $r.key, $r.locale, labels[$r.status], ($r.local // "—" | oneLine | visible), ($r.remote // "—" | oneLine | visible)] ] as $cells
     | [ range(6) as $c | [$headers[$c], $cells[][$c]] | map(length) | max ] as $natural
     # Shrink the two value columns so the table fits the terminal.
     | (if $wide or $cols <= 0 then $natural
@@ -42,6 +44,16 @@ def oneLine: gsub("\r"; "") | gsub("\n"; "\\n");
     ($cells | to_entries[] | line(.value; $visible[.key].status; false)),
     border("└"; "┴"; "┘")
   end),
+  # Possible renames.
+  ( (.renames // []) as $renames
+    | select($renames != [])
+    | ($renames | map(.key | length) | max) as $width
+    | "",
+      ("Possible renames" | paint(1)) + " " + ("· new keys that look like an Ahamatic key with another name" | paint(2)),
+      ( $renames[]
+        | "  \(.key)\(spaces($width - (.key | length)))  → "
+          + ([ .candidates[] | "\(.key | paint(33)) \("(\(reason))" | paint(2))" ] | join(", ")) ),
+      ("  Pushing creates them as new keys; the old ones stay as they are. Check that the app does not use the old names." | paint(2)) ),
   "",
   ("Summary" | paint(1)),
   ( $rows | map(.locale) | unique[] as $locale
@@ -53,4 +65,7 @@ def oneLine: gsub("\r"; "") | gsub("\n"; "\\n");
            | "\(labels[$status]): \($count)" | paintStatus($status) ] | join("   ")) ),
   "",
   "  NO KEY = key does not exist in Ahamatic · MISSING = key exists, no translation for that language",
-  "  EMPTY = translation exists with empty value · DIFFERENT = value differs (only pushed with --update)"
+  "  EMPTY = translation exists with empty value · DIFFERENT = value differs (only pushed with --update)",
+  ( [ $rows[] | select(.status == "different" and ((.local | strip) == (.remote | strip))) ] | length
+    | select(. > 0)
+    | "  \("⚠" | paint(33)) \(.) DIFFERENT values only differ in spaces at the start/end (shown as ␣)" )

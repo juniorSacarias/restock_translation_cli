@@ -16,7 +16,9 @@ Test helpers:
 """
 
 import json
+import math
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, unquote, urlparse
 
@@ -55,9 +57,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def reply(self, status, payload):
-        body = json.dumps(payload).encode()
+        # aha-api answers some errors with plain text (res.send('...')).
+        text = isinstance(payload, str)
+        body = (payload if text else json.dumps(payload)).encode()
         self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Type', 'text/html; charset=utf-8' if text else 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -80,6 +84,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == '/__log':
             return self.reply(200, log)
 
+        delay = state.get('delay', {})
+        if delay.get('path') == url.path:
+            time.sleep(delay.get('seconds', 0))
+
         log.append({
             'method': method,
             'path': url.path,
@@ -89,11 +97,21 @@ class Handler(BaseHTTPRequestHandler):
         })
 
         if method == 'POST' and url.path == '/api/auth/email':
+            # Same validation order and answers as aha-api routes/api.js + routes/auth/email.js.
             credentials = state['credentials']
-            if (body or {}).get('apiKey') != credentials['apiKey'] or \
-                    body.get('emailAddress') != credentials['email'] or \
-                    body.get('password') != credentials['password']:
-                return self.reply(401, {'message': 'Invalid credentials.'})
+            body = body or {}
+            if not body.get('apiKey'):
+                return self.reply(412, 'API Key is required')
+            if not body.get('emailAddress') or '@' not in body['emailAddress']:
+                return self.reply(412, 'Please enter a valid email address.')
+            if not body.get('password'):
+                return self.reply(412, 'Password is required.')
+            if body['apiKey'] != credentials['apiKey']:
+                return self.reply(412, 'API Key is invalid')
+            if body['emailAddress'].lower() != credentials['email'] or body['password'] != credentials['password']:
+                return self.reply(412, 'Incorrect combination of email and password')
+            if state.get('twoFactor'):
+                return self.reply(200, {'message': 'Verification code sent.', 'recipient': body['emailAddress']})
             return self.reply(200, {
                 'token': state['token'],
                 'application': {'Id': 1, 'SchemaName': state['schemaName']},
@@ -122,9 +140,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(412, {'message': 'fields.filter is not a function'})
             filters = {k[len('filter['):-1]: v for k, v in query if k.startswith('filter[')}
             data = [r for r in rows or [] if all(str(r.get(k)) == v for k, v in filters.items())]
+            params = dict(query)
+            total_results = len(data)
+            result = {}
+            if params.get('all') != 'true':
+                # Like aha-api getData + apiReturn: _id DESC, page/limit, paging keys.
+                limit = int(params.get('limit', 50))
+                page = int(params.get('page', 1))
+                offset = page * limit - limit
+                data = sorted(data, key=lambda r: r['Id'], reverse=True)[offset:offset + limit]
+                end = offset + limit >= total_results
+                result = {
+                    'start': page == 1,
+                    'end': end,
+                    'currentPage': page,
+                    'nextPage': 0 if end else page + 1,
+                    'totalPages': math.ceil(total_results / limit),
+                }
             if entity == '_translations':
                 data = [populate_translation(t) for t in data]
-            return self.reply(200, {'data': data})
+            return self.reply(200, {**result, 'data': data, 'totalResults': total_results, 'total': len(rows or [])})
 
         if rows is None:
             return self.reply(412, {'message': f'Unknown entity {entity}'})
